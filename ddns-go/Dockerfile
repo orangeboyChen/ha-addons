@@ -1,5 +1,5 @@
-ARG UPSTREAM_IMAGE_TAG=v6.17.4
-ARG UPSTREAM_RELEASE_TAG=v6.17.4
+ARG UPSTREAM_IMAGE_TAG
+ARG UPSTREAM_RELEASE_TAG
 
 # Rebuild the upstream binary with the Home Assistant Ingress auth patch.
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder

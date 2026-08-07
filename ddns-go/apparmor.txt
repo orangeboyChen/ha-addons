@@ -7,6 +7,8 @@ profile hassio-addon-ddns_go flags=(attach_disconnected,mediate_deleted) {
   network,
 
   /run.sh rix,
+  /bin/sh rix,
+  /bin/busybox rix,
   /app/ddns-go rix,
   /usr/bin/jq rix,
 

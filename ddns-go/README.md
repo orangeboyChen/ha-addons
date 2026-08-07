@@ -35,3 +35,4 @@ The source release tag and the upstream Docker image tag are separate build
 inputs. `UPSTREAM_RELEASE_TAG` selects the source to patch, while
 `UPSTREAM_IMAGE_TAG` selects the upstream runtime image and the published
 `ha-addons-ddns-go` tag. They are deliberately not derived from one another.
+Both arguments are required when building the Dockerfile.

@@ -54,12 +54,14 @@ jobs:
               dockerfile = File.join(File.dirname(config_path), "Dockerfile")
               line = if File.file?(dockerfile)
                 File.readlines(dockerfile).find do |candidate|
-                  candidate.start_with?("FROM ") && !candidate.include?("golang:")
+                  candidate.match?(/\AFROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+\S+)?\s*\z/i) &&
+                    !candidate.match?(/\s+AS\s+\S+\s*\z/i)
                 end
               end
               line ||= "FROM #{config.fetch("image")}"
               abort "No upstream image found for #{config_path}" unless line
-              puts line.split.fetch(1).sub(/:\$\{[^}]+\}\z/, "")
+              image = line.match(/\AFROM\s+(?:--\S+\s+)*(\S+)/i)[1]
+              puts image.sub(/:\$\{[^}]+\}\z/, "")
             ' "${addon_dir}/config.yaml")"
             target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "${addon_dir}/config.yaml")"
             if [ -f "${addon_dir}/Dockerfile" ]; then
