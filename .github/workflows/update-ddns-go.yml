@@ -62,12 +62,14 @@ jobs:
               puts line.split.fetch(1).sub(/:\$\{[^}]+\}\z/, "")
             ' "${addon_dir}/config.yaml")"
             target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "${addon_dir}/config.yaml")"
-            addon_name="${addon_dir##*/}"
-            image_owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-            expected_target_image="ghcr.io/${image_owner}/ha-addons-${addon_name}"
-            if [ "${target_image}" != "${expected_target_image}" ]; then
-              echo "${addon_dir}: image must be ${expected_target_image}, got ${target_image}" >&2
-              exit 1
+            if [ -f "${addon_dir}/Dockerfile" ]; then
+              addon_name="${addon_dir##*/}"
+              image_owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+              expected_target_image="ghcr.io/${image_owner}/ha-addons-${addon_name}"
+              if [ "${target_image}" != "${expected_target_image}" ]; then
+                echo "${addon_dir}: image must be ${expected_target_image}, got ${target_image}" >&2
+                exit 1
+              fi
             fi
             case "${upstream_image}" in
               ghcr.io/*)

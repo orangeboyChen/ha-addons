@@ -10,8 +10,6 @@ init: false
 arch:
   - amd64
   - aarch64
-ports:
-  9876/tcp: null
 apparmor: true
 ingress: true
 ingress_port: 9876
