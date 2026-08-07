@@ -1,0 +1,8 @@
+{
+  "addons": [
+    {
+      "path": "ddns-go",
+      "release_repository": "jeessy2/ddns-go"
+    }
+  ]
+}
