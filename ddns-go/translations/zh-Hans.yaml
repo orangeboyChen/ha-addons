@@ -1,0 +1,7 @@
+configuration:
+  pwd:
+    name: 密码
+    description: Add-on 启动时重置 ddns-go Web UI 密码
+  frequency:
+    name: 更新频率
+    description: DNS 检查间隔，单位为秒

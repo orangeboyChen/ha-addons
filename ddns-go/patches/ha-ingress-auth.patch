@@ -1,0 +1,20 @@
+diff --git a/web/auth.go b/web/auth.go
+index 4ee42b5..e7a7588 100644
+--- a/web/auth.go
++++ b/web/auth.go
+@@ -3,3 +3,4 @@
+ import (
+    "net/http"
+    "os"
+    "time"
+@@ -13,4 +14,10 @@ type ViewFunc func(http.ResponseWriter, *http.Request)
+ // Auth 验证Token是否已经通过
+ func Auth(f ViewFunc) ViewFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // Home Assistant Ingress authenticates the request before forwarding it.
+        if os.Getenv("DDNS_GO_HA_INGRESS") == "1" {
+            f(w, r)
+            return
+        }
+
+        cookieInWeb, err := r.Cookie(cookieName)
