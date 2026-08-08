@@ -164,6 +164,7 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.has_updates == 'true'
+    name: Build ${{ matrix.path }} (${{ matrix.architecture }})
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.builds) }}
@@ -210,6 +211,7 @@ jobs:
   publish:
     needs: [prepare, build]
     if: needs.prepare.outputs.has_updates == 'true'
+    name: Publish ${{ matrix.addon.path }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
