@@ -1,5 +1,5 @@
 name: DDNS-GO
-version: "v6.17.5"
+version: "6.17.5"
 slug: ddns_go
 description: Automatically update public IPv4 or IPv6 addresses in DNS records
 image: ghcr.io/orangeboychen/ha-addons-ddns-go

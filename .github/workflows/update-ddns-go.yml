@@ -97,7 +97,7 @@ jobs:
               v*) candidates+=("${release_tag#v}") ;;
               *) candidates+=("v${release_tag}") ;;
             esac
-            image_tag=""
+            upstream_image_tag=""
             for candidate in "${candidates[@]}"; do
               case "${registry}" in
                 dockerhub)
@@ -118,31 +118,36 @@ jobs:
                   ;;
               esac
               if [ "${status}" = "200" ]; then
-                image_tag="${candidate}"
+                upstream_image_tag="${candidate}"
                 break
               fi
             done
-            if [ -z "${image_tag}" ]; then
+            if [ -z "${upstream_image_tag}" ]; then
               echo "${addon_dir}: no matching image tag found for release ${release_tag}" >&2
               continue
             fi
-            if [ "${image_tag}" = "${current}" ] && \
-              docker buildx imagetools inspect "${target_image}:${image_tag}" >/dev/null 2>&1; then
+            if [ "${derived}" = true ]; then
+              addon_image_tag="${upstream_image_tag#v}"
+            else
+              addon_image_tag="${upstream_image_tag}"
+            fi
+            if [ "${addon_image_tag}" = "${current}" ] && \
+              docker buildx imagetools inspect "${target_image}:${addon_image_tag}" >/dev/null 2>&1; then
               echo "${addon_dir}: ${current} is already current"
               continue
             fi
-            if [ "${image_tag}" = "${current}" ] && [ ! -f "${addon_dir}/Dockerfile" ]; then
-              echo "${addon_dir}: target image ${target_image}:${image_tag} is missing and no Dockerfile is available" >&2
+            if [ "${addon_image_tag}" = "${current}" ] && [ ! -f "${addon_dir}/Dockerfile" ]; then
+              echo "${addon_dir}: target image ${target_image}:${addon_image_tag} is missing and no Dockerfile is available" >&2
               exit 1
             fi
-            if [ "${image_tag}" != "${current}" ]; then
-              sed -i -E "s/^version: \"[^\"]+\"/version: \"${image_tag}\"/" "${addon_dir}/config.yaml"
+            if [ "${addon_image_tag}" != "${current}" ]; then
+              sed -i -E "s/^version: \"[^\"]+\"/version: \"${addon_image_tag}\"/" "${addon_dir}/config.yaml"
             fi
-            printf '%s|%s|%s|%s|%s|%s\n' "${addon_dir}" "${current}" "${image_tag}" "${release_tag}" "${derived}" "${architectures}" >> "${update_file}"
-            if [ "${image_tag}" = "${current}" ]; then
-              echo "${addon_dir}: target image ${target_image}:${image_tag} is missing"
+            printf '%s|%s|%s|%s|%s|%s|%s\n' "${addon_dir}" "${current}" "${addon_image_tag}" "${upstream_image_tag}" "${release_tag}" "${derived}" "${architectures}" >> "${update_file}"
+            if [ "${addon_image_tag}" = "${current}" ]; then
+              echo "${addon_dir}: target image ${target_image}:${addon_image_tag} is missing"
             else
-              echo "${addon_dir}: updated ${current} -> ${image_tag} (release ${release_tag})"
+              echo "${addon_dir}: updated ${current} -> ${addon_image_tag} (upstream image ${upstream_image_tag}, release ${release_tag})"
             fi
           done < <(jq -c '.addons[]' "${registry_file}")
           if [ -s "${update_file}" ]; then
@@ -150,7 +155,7 @@ jobs:
           else
             echo 'has_updates=false' >> "${GITHUB_OUTPUT}"
           fi
-          updates_json="$(jq -Rsc '[splits("\\n") | select(length > 0) | split("|") | {path: .[0], old: .[1], tag: .[2], release: .[3], derived: (.[4] == "true"), arch: (.[5] | fromjson)}]' "${update_file}")"
+          updates_json="$(jq -Rsc '[splits("\\n") | select(length > 0) | split("|") | {path: .[0], old: .[1], tag: .[2], upstream_image_tag: .[3], release: .[4], derived: (.[5] == "true"), arch: (.[6] | fromjson)}]' "${update_file}")"
           builds_json="$(jq -c '[.[] as $addon | if $addon.derived then ($addon.arch[] | if . == "amd64" then $addon + {architecture: "amd64", runner: "ubuntu-24.04"} elif . == "aarch64" then $addon + {architecture: "arm64", runner: "ubuntu-24.04-arm"} else error("No native GitHub runner is configured for Home Assistant architecture: " + .) end) else $addon + {architecture: null, runner: "ubuntu-24.04"} end] | {include: .}' <<<"${updates_json}")"
           {
             echo 'updates<<EOF'
@@ -193,6 +198,7 @@ jobs:
           architecture='${{ matrix.architecture }}'
           addon_dir='${{ matrix.path }}'
           image_tag='${{ matrix.tag }}'
+          upstream_image_tag='${{ matrix.upstream_image_tag }}'
           release_tag='${{ matrix.release }}'
           if [ ! -f "$addon_dir/Dockerfile" ]; then
             echo "$addon_dir: no Dockerfile, using the upstream image directly"
@@ -202,7 +208,7 @@ jobs:
           # Each add-on and architecture pair runs in an independent matrix job.
           docker buildx build --pull \
             --platform "linux/$architecture" \
-            --build-arg "UPSTREAM_IMAGE_TAG=$image_tag" \
+            --build-arg "UPSTREAM_IMAGE_TAG=$upstream_image_tag" \
             --build-arg "UPSTREAM_RELEASE_TAG=$release_tag" \
             --tag "$target_image:$image_tag-$architecture" \
             --push \

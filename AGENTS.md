@@ -53,12 +53,12 @@ duplicate it in `addons.json` or in a second per-app version file.
 
 For a derived app image, add the required Dockerfile and ensure its runtime
 command persists state under Home Assistant's always-writable `/data` path.
-Keep the final runtime-stage `FROM` image tied to the app's `version`; the
-updater uses that image to find releases. Derived images must accept the
+Keep the final runtime-stage `FROM` image tied to the app's upstream image tag;
+the updater uses that image to find releases. Derived images must accept the
 `UPSTREAM_IMAGE_TAG` build argument for the upstream Docker image tag and the
 `UPSTREAM_RELEASE_TAG` build argument for the source checkout. These values can
-differ; the updater uses `UPSTREAM_IMAGE_TAG` as the tag of the published
-`ha-addons-*` image as well.
+differ. The published `ha-addons-*` tag and `config.yaml` version are the
+upstream image tag without a leading `v`.
 Do not assume that Home Assistant options are automatically passed as command
 line flags or environment variables; wire them into the image explicitly.
 
@@ -70,7 +70,9 @@ entry's GitHub `releases/latest` endpoint, reads the image repository from the
 app's Dockerfile (or `config.yaml` when no Dockerfile exists), tries the release
 tag and its common `v`-prefix variant in the implied registry, reads the current version from the
 app's `config.yaml`, and updates only that app when the upstream image tag
-changes. Missing target images are built as well. The build matrix is expanded
+changes. It removes a leading `v` only for the published add-on image tag and
+`config.yaml` version; the upstream `FROM` retains its exact tag. Missing target
+images are built as well. The build matrix is expanded
 from each app's `config.yaml` `arch` list: `amd64` runs on native
 `ubuntu-24.04`, and `aarch64` runs on native `ubuntu-24.04-arm`. Each changed
 app and declared architecture pair is an independent job; per-app manifest jobs
