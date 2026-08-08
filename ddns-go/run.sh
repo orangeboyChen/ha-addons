@@ -10,17 +10,16 @@ password="$(jq -r '.pwd // empty' "${options_file}")"
 export DDNS_GO_HA_INGRESS=1
 
 if [ -z "${password}" ]; then
-  password="$(head -c 48 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32)"
+  password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
 fi
 
 if [ ! -f "${config_file}" ]; then
   umask 077
-  password_yaml="$(jq -Rn --arg value "${password}" '$value')"
   cat >"${config_file}" <<EOF
 user:
   username: homeassistant
-  password: ${password_yaml}
 EOF
+  /app/ddns-go -c "${config_file}" -resetPassword "${password}"
 elif [ "$(jq -r '.pwd // empty' "${options_file}")" != "" ]; then
   /app/ddns-go -c "${config_file}" -resetPassword "${password}" || true
 fi
