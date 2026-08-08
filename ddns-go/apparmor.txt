@@ -1,0 +1,24 @@
+#include <tunables/global>
+
+profile hassio-addon-ddns_go flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  capability,
+  network,
+
+  /run.sh rix,
+  /bin/sh rix,
+  /bin/busybox rix,
+  /app/ddns-go rix,
+  /usr/bin/jq rix,
+
+  /data/ r,
+  /data/** rwk,
+  /etc/** r,
+  /lib/** r,
+  /proc/** r,
+  /run/** rwk,
+  /sys/** r,
+  /tmp/** rwk,
+  /usr/** r,
+}

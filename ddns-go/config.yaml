@@ -1,8 +1,8 @@
 name: DDNS-GO
 version: "v6.17.4"
 slug: ddns_go
-description: Dynamic DNS client for Home Assistant
-image: ghcr.io/jeessy2/ddns-go
+description: Automatically update public IPv4 or IPv6 addresses in DNS records
+image: ghcr.io/orangeboychen/ha-addons-ddns-go
 url: https://github.com/orangeboyChen/ha-addons
 startup: application
 boot: auto
@@ -10,13 +10,16 @@ init: false
 arch:
   - amd64
   - aarch64
-ports:
-  9876/tcp: 9876
 apparmor: true
-host_network: true
 ingress: true
 ingress_port: 9876
 panel_icon: mdi:dns
 panel_title: DDNS-GO
-environment:
-  DDNS_CONFIG_FILE_PATH: /data/.ddns_go_config.yaml
+options:
+  pwd: ""
+  frequency: 300
+schema:
+  pwd: str
+  frequency: "int(10,)"
+breaking_versions:
+  - "6.6.9"

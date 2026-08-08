@@ -7,9 +7,14 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  update:
+  prepare:
+    outputs:
+      has_updates: ${{ steps.prepare_updates.outputs.has_updates }}
+      updates: ${{ steps.prepare_updates.outputs.updates }}
+      builds: ${{ steps.prepare_updates.outputs.builds }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -18,7 +23,20 @@ jobs:
           ref: ${{ github.ref_name }}
           persist-credentials: true
 
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" \
+            --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Update add-ons to the latest upstream releases
+        id: prepare_updates
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -31,15 +49,40 @@ jobs:
           while IFS= read -r addon; do
             addon_dir="$(jq -r '.path' <<<"${addon}")"
             release_repository="$(jq -r '.release_repository' <<<"${addon}")"
-            image_repository="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "${addon_dir}/config.yaml")"
-            case "${image_repository}" in
+            upstream_image="$(ruby -r yaml -e '
+              config_path = ARGV.fetch(0)
+              config = YAML.load_file(config_path)
+              dockerfile = File.join(File.dirname(config_path), "Dockerfile")
+              # The final stage is the runtime image; it may be named (AS runtime).
+              line = File.readlines(dockerfile).reverse.find { |candidate|
+                candidate.match?(/\AFROM\s+(?:--\S+\s+)*(\S+)/i)
+              } if File.file?(dockerfile)
+              line ||= "FROM #{config.fetch("image")}"
+              abort "No upstream image found for #{config_path}" unless line
+              image = line.match(/\AFROM\s+(?:--\S+\s+)*(\S+)/i)[1]
+              puts image.sub(/:\$\{[^}]+\}\z/, "")
+            ' "${addon_dir}/config.yaml")"
+            target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "${addon_dir}/config.yaml")"
+            architectures="$(ruby -r yaml -r json -e 'puts JSON.generate(YAML.load_file(ARGV[0]).fetch("arch"))' "${addon_dir}/config.yaml")"
+            derived=false
+            if [ -f "${addon_dir}/Dockerfile" ]; then
+              derived=true
+              addon_name="${addon_dir##*/}"
+              image_owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+              expected_target_image="ghcr.io/${image_owner}/ha-addons-${addon_name}"
+              if [ "${target_image}" != "${expected_target_image}" ]; then
+                echo "${addon_dir}: image must be ${expected_target_image}, got ${target_image}" >&2
+                exit 1
+              fi
+            fi
+            case "${upstream_image}" in
               ghcr.io/*)
                 registry="ghcr"
-                image_name="${image_repository#ghcr.io/}"
+                image_name="${upstream_image#ghcr.io/}"
                 ;;
               *)
                 registry="dockerhub"
-                image_name="${image_repository}"
+                image_name="${upstream_image}"
                 ;;
             esac
             current="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("version")' "${addon_dir}/config.yaml")"
@@ -83,34 +126,170 @@ jobs:
               echo "${addon_dir}: no matching image tag found for release ${release_tag}" >&2
               continue
             fi
-            if [ "${image_tag}" = "${current}" ]; then
+            if [ "${image_tag}" = "${current}" ] && \
+              docker buildx imagetools inspect "${target_image}:${image_tag}" >/dev/null 2>&1; then
               echo "${addon_dir}: ${current} is already current"
               continue
             fi
-            sed -i -E "s/^version: \"[^\"]+\"/version: \"${image_tag}\"/" "${addon_dir}/config.yaml"
-            printf '%s|%s|%s\n' "${addon_dir}" "${current}" "${image_tag}" >> "${update_file}"
-            echo "${addon_dir}: updated ${current} -> ${image_tag} (release ${release_tag})"
+            if [ "${image_tag}" = "${current}" ] && [ ! -f "${addon_dir}/Dockerfile" ]; then
+              echo "${addon_dir}: target image ${target_image}:${image_tag} is missing and no Dockerfile is available" >&2
+              exit 1
+            fi
+            if [ "${image_tag}" != "${current}" ]; then
+              sed -i -E "s/^version: \"[^\"]+\"/version: \"${image_tag}\"/" "${addon_dir}/config.yaml"
+            fi
+            printf '%s|%s|%s|%s|%s|%s\n' "${addon_dir}" "${current}" "${image_tag}" "${release_tag}" "${derived}" "${architectures}" >> "${update_file}"
+            if [ "${image_tag}" = "${current}" ]; then
+              echo "${addon_dir}: target image ${target_image}:${image_tag} is missing"
+            else
+              echo "${addon_dir}: updated ${current} -> ${image_tag} (release ${release_tag})"
+            fi
           done < <(jq -c '.addons[]' "${registry_file}")
+          if [ -s "${update_file}" ]; then
+            echo 'has_updates=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'has_updates=false' >> "${GITHUB_OUTPUT}"
+          fi
+          updates_json="$(jq -Rsc '[splits("\\n") | select(length > 0) | split("|") | {path: .[0], old: .[1], tag: .[2], release: .[3], derived: (.[4] == "true"), arch: (.[5] | fromjson)}]' "${update_file}")"
+          builds_json="$(jq -c '[.[] as $addon | if $addon.derived then ($addon.arch[] | if . == "amd64" then $addon + {architecture: "amd64", runner: "ubuntu-24.04"} elif . == "aarch64" then $addon + {architecture: "arm64", runner: "ubuntu-24.04-arm"} else error("No native GitHub runner is configured for Home Assistant architecture: " + .) end) else $addon + {architecture: null, runner: "ubuntu-24.04"} end] | {include: .}' <<<"${updates_json}")"
+          {
+            echo 'updates<<EOF'
+            echo "${updates_json}"
+            echo EOF
+            echo 'builds<<EOF'
+            echo "${builds_json}"
+            echo EOF
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.has_updates == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.builds) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" \
+            --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push architecture image tags
+        run: |
+          set -euo pipefail
+          architecture='${{ matrix.architecture }}'
+          addon_dir='${{ matrix.path }}'
+          image_tag='${{ matrix.tag }}'
+          release_tag='${{ matrix.release }}'
+          if [ ! -f "$addon_dir/Dockerfile" ]; then
+            echo "$addon_dir: no Dockerfile, using the upstream image directly"
+            exit 0
+          fi
+          target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "$addon_dir/config.yaml")"
+          # Each add-on and architecture pair runs in an independent matrix job.
+          docker buildx build --pull \
+            --platform "linux/$architecture" \
+            --build-arg "UPSTREAM_IMAGE_TAG=$image_tag" \
+            --build-arg "UPSTREAM_RELEASE_TAG=$release_tag" \
+            --tag "$target_image:$image_tag-$architecture" \
+            --push \
+            "$addon_dir"
+
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.has_updates == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        addon: ${{ fromJSON(needs.prepare.outputs.updates) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io \
+            --username "$GITHUB_ACTOR" \
+            --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Publish multi-architecture manifests
+        run: |
+          set -euo pipefail
+          addon_dir='${{ matrix.addon.path }}'
+          image_tag='${{ matrix.addon.tag }}'
+          if [ ! -f "$addon_dir/Dockerfile" ]; then
+            exit 0
+          fi
+          target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "$addon_dir/config.yaml")"
+          manifest_sources=()
+          while IFS= read -r addon_architecture; do
+            case "$addon_architecture" in
+              amd64) architecture=amd64 ;;
+              aarch64) architecture=arm64 ;;
+              *) echo "$addon_dir: no native GitHub runner is configured for $addon_architecture" >&2; exit 1 ;;
+            esac
+            manifest_sources+=("$target_image:$image_tag-$architecture")
+          done < <(ruby -r yaml -e 'YAML.load_file(ARGV[0]).fetch("arch").each { |architecture| puts architecture }' "$addon_dir/config.yaml")
+          docker buildx imagetools create --tag "$target_image:$image_tag" "${manifest_sources[@]}"
+
+  commit:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.has_updates == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: Commit and push the update
         run: |
           set -euo pipefail
+          updates_json='${{ needs.prepare.outputs.updates }}'
+          while IFS= read -r addon; do
+            addon_dir="$(jq -r '.path' <<<"${addon}")"
+            old_version="$(jq -r '.old' <<<"${addon}")"
+            image_tag="$(jq -r '.tag' <<<"${addon}")"
+            if [ "${image_tag}" != "${old_version}" ]; then
+              sed -i -E "s/^version: \\\"[^\\\"]+\\\"/version: \\\"${image_tag}\\\"/" "${addon_dir}/config.yaml"
+            fi
+          done < <(jq -c '.[]' <<<"${updates_json}")
           if git diff --quiet; then
             exit 0
           fi
-          update_file="${RUNNER_TEMP}/addon-updates"
-          update_count="$(wc -l < "${update_file}" | tr -d ' ')"
-          if [ "${update_count}" -eq 1 ]; then
-            title="chore: update $(cut -d'|' -f1 "${update_file}")"
+          update_count="$(jq 'length' <<<"${updates_json}")"
+          if [ "$update_count" -eq 1 ]; then
+            title="chore: update $(jq -r '.[0].path' <<<"${updates_json}")"
           else
             title="chore: update add-on upstream versions"
           fi
           {
-            printf '%s\n\n' "${title}"
-            awk -F'|' '{printf "- %s: %s -> %s\n", $1, $2, $3}' "${update_file}"
-          } > "${RUNNER_TEMP}/commit-message"
+            printf '%s\n\n' "$title"
+            jq -r '.[] | "- \(.path): \(.old) -> \(.tag)"' <<<"${updates_json}"
+          } > "$RUNNER_TEMP/commit-message"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add addons.json -- '*'/config.yaml
-          git commit --file "${RUNNER_TEMP}/commit-message"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git commit --file "$RUNNER_TEMP/commit-message"
+          git push origin "HEAD:${{ github.ref_name }}"

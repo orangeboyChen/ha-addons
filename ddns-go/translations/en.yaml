@@ -1,0 +1,7 @@
+configuration:
+  pwd:
+    name: Password
+    description: Reset the ddns-go web UI password when the app starts
+  frequency:
+    name: Update frequency
+    description: Interval between DNS checks, in seconds
