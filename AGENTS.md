@@ -53,8 +53,8 @@ duplicate it in `addons.json` or in a second per-app version file.
 
 For a derived app image, add the required Dockerfile and ensure its runtime
 command persists state under Home Assistant's always-writable `/data` path.
-Keep the first non-builder `FROM` image tied to the app's `version`; the updater
-uses that image to find releases. Derived images must accept the
+Keep the final runtime-stage `FROM` image tied to the app's `version`; the
+updater uses that image to find releases. Derived images must accept the
 `UPSTREAM_IMAGE_TAG` build argument for the upstream Docker image tag and the
 `UPSTREAM_RELEASE_TAG` build argument for the source checkout. These values can
 differ; the updater uses `UPSTREAM_IMAGE_TAG` as the tag of the published
@@ -70,11 +70,13 @@ entry's GitHub `releases/latest` endpoint, reads the image repository from the
 app's Dockerfile (or `config.yaml` when no Dockerfile exists), tries the release
 tag and its common `v`-prefix variant in the implied registry, reads the current version from the
 app's `config.yaml`, and updates only that app when the upstream image tag
-changes. Missing target images are built as well. Each changed app and
-architecture pair is an independent matrix job on native `ubuntu-24.04` or
-`ubuntu-24.04-arm` runners; the per-app manifest jobs also run in parallel
-before the version commit is created. The commit contains a summary title and
-one body line per app showing the old and new image tags.
+changes. Missing target images are built as well. The build matrix is expanded
+from each app's `config.yaml` `arch` list: `amd64` runs on native
+`ubuntu-24.04`, and `aarch64` runs on native `ubuntu-24.04-arm`. Each changed
+app and declared architecture pair is an independent job; per-app manifest jobs
+combine only the declared architectures before the version commit is created.
+The commit contains a summary title and one body line per app showing the old
+and new image tags.
 
 An app without a `Dockerfile` uses its configured upstream `image` directly and
 is not built by the workflow. The workflow fails instead of committing if such
@@ -82,7 +84,7 @@ an image tag is missing.
 
 When adding a new app to the registry, declare its GitHub release repository.
 Set the app's target `image` in `config.yaml` and its upstream image in the
-first non-builder `FROM` line of `Dockerfile`; upstream images prefixed with
+final runtime-stage `FROM` line of `Dockerfile`; upstream images prefixed with
 `ghcr.io/` are checked through GHCR, while unqualified names are treated as
 Docker Hub repositories. The updater tries both `v1.2.3` and `1.2.3` tag forms,
 so a GitHub release tag does not have to equal the image tag.

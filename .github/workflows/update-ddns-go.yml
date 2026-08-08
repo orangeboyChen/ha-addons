@@ -14,6 +14,7 @@ jobs:
     outputs:
       has_updates: ${{ steps.prepare_updates.outputs.has_updates }}
       updates: ${{ steps.prepare_updates.outputs.updates }}
+      builds: ${{ steps.prepare_updates.outputs.builds }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -52,19 +53,20 @@ jobs:
               config_path = ARGV.fetch(0)
               config = YAML.load_file(config_path)
               dockerfile = File.join(File.dirname(config_path), "Dockerfile")
-              line = if File.file?(dockerfile)
-                File.readlines(dockerfile).find do |candidate|
-                  candidate.match?(/\AFROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+\S+)?\s*\z/i) &&
-                    !candidate.match?(/\s+AS\s+\S+\s*\z/i)
-                end
-              end
+              # The final stage is the runtime image; it may be named (AS runtime).
+              line = File.readlines(dockerfile).reverse.find { |candidate|
+                candidate.match?(/\AFROM\s+(?:--\S+\s+)*(\S+)/i)
+              } if File.file?(dockerfile)
               line ||= "FROM #{config.fetch("image")}"
               abort "No upstream image found for #{config_path}" unless line
               image = line.match(/\AFROM\s+(?:--\S+\s+)*(\S+)/i)[1]
               puts image.sub(/:\$\{[^}]+\}\z/, "")
             ' "${addon_dir}/config.yaml")"
             target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "${addon_dir}/config.yaml")"
+            architectures="$(ruby -r yaml -r json -e 'puts JSON.generate(YAML.load_file(ARGV[0]).fetch("arch"))' "${addon_dir}/config.yaml")"
+            derived=false
             if [ -f "${addon_dir}/Dockerfile" ]; then
+              derived=true
               addon_name="${addon_dir##*/}"
               image_owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
               expected_target_image="ghcr.io/${image_owner}/ha-addons-${addon_name}"
@@ -136,7 +138,7 @@ jobs:
             if [ "${image_tag}" != "${current}" ]; then
               sed -i -E "s/^version: \"[^\"]+\"/version: \"${image_tag}\"/" "${addon_dir}/config.yaml"
             fi
-            printf '%s|%s|%s|%s\n' "${addon_dir}" "${current}" "${image_tag}" "${release_tag}" >> "${update_file}"
+            printf '%s|%s|%s|%s|%s|%s\n' "${addon_dir}" "${current}" "${image_tag}" "${release_tag}" "${derived}" "${architectures}" >> "${update_file}"
             if [ "${image_tag}" = "${current}" ]; then
               echo "${addon_dir}: target image ${target_image}:${image_tag} is missing"
             else
@@ -148,10 +150,14 @@ jobs:
           else
             echo 'has_updates=false' >> "${GITHUB_OUTPUT}"
           fi
-          updates_json="$(jq -Rsc '[splits("\\n") | select(length > 0) | split("|") | {path: .[0], old: .[1], tag: .[2], release: .[3]}]' "${update_file}")"
+          updates_json="$(jq -Rsc '[splits("\\n") | select(length > 0) | split("|") | {path: .[0], old: .[1], tag: .[2], release: .[3], derived: (.[4] == "true"), arch: (.[5] | fromjson)}]' "${update_file}")"
+          builds_json="$(jq -c '[.[] as $addon | if $addon.derived then ($addon.arch[] | if . == "amd64" then $addon + {architecture: "amd64", runner: "ubuntu-24.04"} elif . == "aarch64" then $addon + {architecture: "arm64", runner: "ubuntu-24.04-arm"} else error("No native GitHub runner is configured for Home Assistant architecture: " + .) end) else $addon + {architecture: null, runner: "ubuntu-24.04"} end] | {include: .}' <<<"${updates_json}")"
           {
             echo 'updates<<EOF'
             echo "${updates_json}"
+            echo EOF
+            echo 'builds<<EOF'
+            echo "${builds_json}"
             echo EOF
           } >> "${GITHUB_OUTPUT}"
 
@@ -160,14 +166,8 @@ jobs:
     if: needs.prepare.outputs.has_updates == 'true'
     strategy:
       fail-fast: false
-      matrix:
-        addon: ${{ fromJSON(needs.prepare.outputs.updates) }}
-        architecture:
-          - name: amd64
-            runner: ubuntu-24.04
-          - name: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.architecture.runner }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.builds) }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -189,10 +189,10 @@ jobs:
       - name: Build and push architecture image tags
         run: |
           set -euo pipefail
-          architecture="${{ matrix.architecture.name }}"
-          addon_dir='${{ matrix.addon.path }}'
-          image_tag='${{ matrix.addon.tag }}'
-          release_tag='${{ matrix.addon.release }}'
+          architecture='${{ matrix.architecture }}'
+          addon_dir='${{ matrix.path }}'
+          image_tag='${{ matrix.tag }}'
+          release_tag='${{ matrix.release }}'
           if [ ! -f "$addon_dir/Dockerfile" ]; then
             echo "$addon_dir: no Dockerfile, using the upstream image directly"
             exit 0
@@ -242,10 +242,16 @@ jobs:
             exit 0
           fi
           target_image="$(ruby -r yaml -e 'puts YAML.load_file(ARGV[0]).fetch("image")' "$addon_dir/config.yaml")"
-          docker buildx imagetools create \
-            --tag "$target_image:$image_tag" \
-            "$target_image:$image_tag-amd64" \
-            "$target_image:$image_tag-arm64"
+          manifest_sources=()
+          while IFS= read -r addon_architecture; do
+            case "$addon_architecture" in
+              amd64) architecture=amd64 ;;
+              aarch64) architecture=arm64 ;;
+              *) echo "$addon_dir: no native GitHub runner is configured for $addon_architecture" >&2; exit 1 ;;
+            esac
+            manifest_sources+=("$target_image:$image_tag-$architecture")
+          done < <(ruby -r yaml -e 'YAML.load_file(ARGV[0]).fetch("arch").each { |architecture| puts architecture }' "$addon_dir/config.yaml")
+          docker buildx imagetools create --tag "$target_image:$image_tag" "${manifest_sources[@]}"
 
   commit:
     needs: [prepare, publish]
