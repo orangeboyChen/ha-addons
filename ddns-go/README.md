@@ -15,13 +15,18 @@ Assistant instead of redirecting to ddns-go's `/login` page.
 The bypass is limited to that explicit environment variable. A regular
 upstream ddns-go image retains its normal login behavior.
 
+On first start, `run.sh` creates a ddns-go account with an internal username
+and either the configured `pwd` value or a generated password. This preserves
+ddns-go's configuration validation and API behavior while Home Assistant
+Ingress remains the only user-facing authentication boundary.
+
 ## Runtime Options
 
 `run.sh` reads `/data/options.json`, stores ddns-go configuration in
 `/data/.ddns_go_config.yaml`, and starts the web interface on the internal
-Ingress port. `frequency` controls the update interval. `pwd` is passed to
-ddns-go's password-reset command before startup, so the stored application
-password can be managed through the add-on options.
+Ingress port. `frequency` controls the update interval. `pwd` sets the
+internal ddns-go account password; if it is empty, a password is generated on
+first start and retained in the data directory.
 
 ## Updating the Patch
 

@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: Rebuild derived add-on images even when the version is unchanged
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -26,8 +32,10 @@ jobs:
       - name: Log in to GitHub Container Registry
         env:
           GH_TOKEN: ${{ github.token }}
+          FORCE_BUILD: ${{ inputs.force_build || 'false' }}
         run: |
           set -euo pipefail
+          force_build="${FORCE_BUILD}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io \
             --username "$GITHUB_ACTOR" \
             --password-stdin
@@ -126,12 +134,16 @@ jobs:
               echo "${addon_dir}: no matching image tag found for release ${release_tag}" >&2
               continue
             fi
-            if [ "${image_tag}" = "${current}" ] && \
+            if [ "${force_build}" != "true" ] && [ "${image_tag}" = "${current}" ] && \
               docker buildx imagetools inspect "${target_image}:${image_tag}" >/dev/null 2>&1; then
               echo "${addon_dir}: ${current} is already current"
               continue
             fi
             if [ "${image_tag}" = "${current}" ] && [ ! -f "${addon_dir}/Dockerfile" ]; then
+              if [ "${force_build}" = "true" ]; then
+                echo "${addon_dir}: no Dockerfile, cannot force-build the direct upstream image"
+                continue
+              fi
               echo "${addon_dir}: target image ${target_image}:${image_tag} is missing and no Dockerfile is available" >&2
               exit 1
             fi
