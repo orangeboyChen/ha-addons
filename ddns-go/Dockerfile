@@ -13,7 +13,8 @@ RUN git clone --depth 1 --branch "${UPSTREAM_RELEASE_TAG}" \
       https://github.com/jeessy2/ddns-go.git /src
 WORKDIR /src
 COPY patches/ha-ingress-auth.patch /tmp/ha-ingress-auth.patch
-RUN git apply --ignore-space-change /tmp/ha-ingress-auth.patch && gofmt -w web/auth.go
+RUN git apply --ignore-space-change /tmp/ha-ingress-auth.patch \
+    && gofmt -w web/auth.go web/save.go
 RUN CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
     go build -trimpath -ldflags "-s -w -X main.version=${UPSTREAM_RELEASE_TAG}" -o /ddns-go .
 
